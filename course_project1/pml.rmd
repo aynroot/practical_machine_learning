@@ -1,0 +1,94 @@
+---
+title: "Course Project 1"
+author: "Valeria Chernenko"
+output: html_document
+---
+
+Loading train and test data, importing ML lib, making some initialization:
+```{r}
+library(caret)
+set.seed(42)
+setwd("~/Documents/dev/coursera/practical_ml/course_project1")
+pml_training_set = read.csv('pml-training.csv')
+pml_testing_set = read.csv('pml-testing.csv')
+in_train <- createDataPartition(y=pml_training_set$classe, p=0.6, list=F)
+pml_train <- pml_training_set[in_train, ]
+pml_test <- pml_training_set[-in_train, ]
+str(pml_train)
+```
+
+We have to make variables all of appropriate types (some of them are factors instead of nums). We have to do exactly the same with test set.
+```{r warning=FALSE}
+for (column in c("kurtosis_roll_belt", "kurtosis_picth_belt", "kurtosis_yaw_belt", "skewness_roll_belt", "skewness_roll_belt.1", "skewness_yaw_belt", "max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "kurtosis_roll_arm", "kurtosis_picth_arm", "kurtosis_yaw_arm", "skewness_roll_arm", "skewness_pitch_arm", "skewness_yaw_arm", "kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "kurtosis_yaw_dumbbell", "skewness_roll_dumbbell", "skewness_pitch_dumbbell", "skewness_yaw_dumbbell", "max_yaw_dumbbell", "min_yaw_dumbbell")) {
+    pml_train[[column]] <- as.numeric(as.character(pml_train[[column]]))  
+    pml_test[[column]] <- as.numeric(as.character(pml_test[[column]]))
+    pml_testing_set[[column]] <- as.numeric(as.character(pml_testing_set[[column]]))
+}
+```
+
+
+We will remove those factors, that are near zero value predictors. 
+```{r}
+nsv <- nearZeroVar(pml_train, saveMetrics = F)
+pml_train <- subset(pml_train, select=-nsv)
+pml_test <- subset(pml_test, select=-nsv)
+pml_testing_set <- subset(pml_testing_set, select=-nsv)
+```
+
+So we reduced number of features from 160 to 118.
+Also we remove factors that are unnecessary for prediction and used only for logging, such as X factor, timestamps, num_window.
+```{r}
+remove_names = c("X", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "num_window")
+remove_names_indices = names(pml_train) %in% remove_names
+pml_train <- pml_train[!remove_names_indices]
+pml_test <- pml_test[!remove_names_indices]
+pml_testing_set <- pml_testing_set[!remove_names_indices]
+dim(pml_train)
+str(pml_train)
+```
+
+We'll remove variables that have more than 90% of NA, because there is no sufficient info about them.
+```{r}
+not_na_indices <- colSums(is.na(pml_train)) < 0.90 * nrow(pml_train)
+pml_train <- pml_train[, not_na_indices]
+pml_test <- pml_test[, not_na_indices]
+pml_testing_set <- pml_testing_set[, not_na_indices]
+str(pml_train)
+```
+
+We will use dummy variables for user names, so that we can transform data to matrix format.
+``` {r}
+dummies <- dummyVars(classe ~ ., data = pml_train)
+pml_train_matrix <- predict(dummies, newdata = pml_train)
+pml_test_matrix <- predict(dummies, newdata = pml_test)
+# generate fake column to process with dummyVars
+pml_testing_set[['classe']] <- rep("A", 20)
+pml_testing_set_matrix <- predict(dummies, newdata = pml_testing_set)
+```
+
+Let's train the KNN model and look at the confusion matrix. We will fit knn using 10-fold cross validation and 3 different params of clusters size (bur obviously, final cluster size should be 5 like number of classes). I use KNN because I think it is a good model for this experment -- there are 5 classes, that probably will be separated by some variable values. 
+```{r}
+knn_fit_nopp <- train(x = pml_train_matrix, y = pml_train$classe, method="knn", trControl = trainControl(method="cv"), tuneLength = 3)
+confusionMatrix(data = predict(knn_fit_nopp, newdata=pml_test_matrix), reference = pml_test$classe)$table
+```
+
+Let's do the same, but now preprocess data (scale and center it):
+```{r}
+knn_fit <- train(x = pml_train_matrix, y = pml_train$classe, method="knn", preProcess=c("center", "scale"), trControl = trainControl(method="cv"), tuneLength = 3)
+cm <- confusionMatrix(data = predict(knn_fit, newdata=pml_test_matrix), reference = pml_test$classe)
+cm$table
+```
+
+We got better results. We can normalize it and see that values on diagonals () are very high -- all of them are above 90 percent.
+```{r}
+cm_norm <- cm$table / rowSums(cm$table) * 100
+cm_norm
+```
+
+Let's apply our model initial testing set to find out classes:
+```{r}
+predict(knn_fit, newdata=pml_testing_set_matrix)
+```
+
+As a conclusion I can say, that the results are even better than expected. Oficial accuracy results are about 80 percent each class, which are less than our results. 
+
